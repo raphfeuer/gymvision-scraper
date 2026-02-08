@@ -1,0 +1,114 @@
+#!/bin/bash
+set -e
+
+SCRAPER="/Users/raphfeuer/Documents/GymVision/Scrap Gyms/google-maps-scraper/google-maps-scraper"
+RESULTS_DIR="/Users/raphfeuer/Documents/GymVision/Scrap Gyms/results"
+QUERIES_DIR="/Users/raphfeuer/Documents/GymVision/Scrap Gyms/queries"
+
+if [ -z "$1" ]; then
+  echo "Usage:"
+  echo "  scrape <city>              Quick scrape (~80-140 results)"
+  echo "  scrape -f <queries.txt>    Deep scrape from custom query file"
+  echo ""
+  echo "Examples:"
+  echo "  scrape Paris"
+  echo "  scrape -f queries/new_york.txt"
+  echo ""
+  echo "Query files go in: $QUERIES_DIR"
+  echo "One query per line, e.g.:"
+  echo "  gym in Manhattan"
+  echo "  gym in Brooklyn"
+  echo "  gym in Queens"
+  exit 1
+fi
+
+mkdir -p "$RESULTS_DIR" "$QUERIES_DIR"
+
+# Determine mode: custom file or quick city scrape
+if [ "$1" = "-f" ]; then
+  if [ -z "$2" ]; then
+    echo "Error: -f requires a query file path"
+    exit 1
+  fi
+  INPUT_FILE="$2"
+  if [ ! -f "$INPUT_FILE" ]; then
+    echo "Error: File not found: $INPUT_FILE"
+    exit 1
+  fi
+  # Derive output name from filename
+  BASENAME=$(basename "$INPUT_FILE" .txt)
+  OUTPUT_FILE="$RESULTS_DIR/${BASENAME}.csv"
+  QUERY_COUNT=$(wc -l < "$INPUT_FILE" | tr -d ' ')
+  echo "Deep scrape from $INPUT_FILE ($QUERY_COUNT queries)..."
+else
+  CITY="$1"
+  SAFE_CITY=$(echo "$CITY" | tr ' ' '_')
+  INPUT_FILE=$(mktemp)
+  cat > "$INPUT_FILE" <<EOF
+gym in $CITY
+fitness center in $CITY
+crossfit in $CITY
+fitness club in $CITY
+workout gym in $CITY
+training gym in $CITY
+bodybuilding gym in $CITY
+EOF
+  OUTPUT_FILE="$RESULTS_DIR/${SAFE_CITY}.csv"
+  echo "Quick scrape for $CITY (7 queries)..."
+fi
+
+echo "Output: $OUTPUT_FILE"
+echo ""
+
+RAW_FILE=$(mktemp)
+
+"$SCRAPER" \
+  -input "$INPUT_FILE" \
+  -results "$RAW_FILE" \
+  -depth 10 \
+  -lang en \
+  -c 12 \
+  -exit-on-inactivity 3m
+
+# Clean up temp query file (only if we created it)
+if [ "${1}" != "-f" ]; then
+  rm -f "$INPUT_FILE"
+fi
+
+# Deduplicate by place_id (proper CSV parsing — awk can't handle commas in quoted fields)
+if [ -f "$RAW_FILE" ]; then
+  python3 -c "
+import csv, sys
+seen = set()
+with open('$RAW_FILE', 'r', encoding='utf-8') as infile, open('$OUTPUT_FILE', 'w', newline='', encoding='utf-8') as outfile:
+    reader = csv.DictReader(infile)
+    writer = csv.DictWriter(outfile, fieldnames=reader.fieldnames)
+    writer.writeheader()
+    for row in reader:
+        pid = row.get('place_id', '')
+        if pid and pid not in seen:
+            seen.add(pid)
+            writer.writerow(row)
+"
+  rm -f "$RAW_FILE"
+
+  COUNT=$(tail -n +2 "$OUTPUT_FILE" | wc -l | tr -d ' ')
+
+  # Rename query file to mark as done (only for -f mode)
+  if [ "${1}" = "-f" ]; then
+    DIR=$(dirname "$INPUT_FILE")
+    BASE=$(basename "$INPUT_FILE" .txt)
+    mv "$INPUT_FILE" "${DIR}/${BASE}_done.txt"
+    echo ""
+    echo "Done! Found $COUNT unique gyms"
+    echo "Results saved to: $OUTPUT_FILE"
+    echo "Query file renamed to: ${DIR}/${BASE}_done.txt"
+  else
+    echo ""
+    echo "Done! Found $COUNT unique gyms"
+    echo "Results saved to: $OUTPUT_FILE"
+  fi
+else
+  echo "No results file generated."
+  exit 1
+fi
