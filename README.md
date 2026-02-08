@@ -4,9 +4,24 @@ Scrape gyms from Google Maps and export to CSV. Built on top of [gosom/google-ma
 
 56 cities pre-configured across 7 countries.
 
-## Quick Start
+## Install (from scratch)
 
-Requires **Go 1.25+** and **Python 3**.
+### 1. Prerequisites (clean Mac)
+
+```bash
+# Install Xcode Command Line Tools (git, etc.)
+xcode-select --install
+
+# Install Homebrew
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install Go
+brew install go
+```
+
+Python 3 comes pre-installed on macOS. Verify with `python3 --version`.
+
+### 2. Setup
 
 ```bash
 git clone git@github.com:raphfeuer/gymvision-scraper.git
@@ -14,7 +29,12 @@ cd gymvision-scraper
 ./gymvision-scraper install          # builds binary, adds to PATH
 source ~/.zshrc                      # reload shell (one time)
 gymvision-scraper install queries    # install all 56 city packs
-gymvision-scraper scrape paris       # start scraping
+```
+
+### 3. Scrape
+
+```bash
+gymvision-scraper scrape paris
 ```
 
 ## Commands
