@@ -131,13 +131,24 @@ cmd_install_queries() {
 
     mkdir -p "$QUERIES_DIR/$country_lower"
     count=0
+    skipped=0
     for f in "$src"/*.txt; do
       [ ! -f "$f" ] && continue
+      base=$(basename "$f" .txt)
+      # Skip if a _done.txt version already exists in the target
+      if [ -f "$QUERIES_DIR/$country_lower/${base}_done.txt" ]; then
+        skipped=$((skipped + 1))
+        continue
+      fi
       cp "$f" "$QUERIES_DIR/$country_lower/"
       count=$((count + 1))
     done
     total_cities=$((total_cities + count))
-    echo -e "  ${GREEN}$country_lower${NC} — $count cities installed"
+    if [ "$skipped" -gt 0 ]; then
+      echo -e "  ${GREEN}$country_lower${NC} — $count cities installed ${DIM}($skipped already scraped, skipped)${NC}"
+    else
+      echo -e "  ${GREEN}$country_lower${NC} — $count cities installed"
+    fi
   done
 
   echo ""
