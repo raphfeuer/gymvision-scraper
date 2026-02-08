@@ -1,4 +1,5 @@
 results/
+/queries/
 google-maps-scraper/
 .DS_Store
 *.csv

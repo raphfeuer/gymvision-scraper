@@ -1,0 +1,383 @@
+#!/bin/bash
+set -e
+
+# Resolve install directory
+GYMVISION_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")")" && pwd)"
+SCRAPER="$GYMVISION_DIR/google-maps-scraper/google-maps-scraper"
+RESULTS_DIR="$GYMVISION_DIR/results"
+QUERIES_DIR="$GYMVISION_DIR/queries"
+DATA_DIR="$GYMVISION_DIR/data/queries"
+
+# ── Colors ──
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+RED='\033[0;31m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# ── Help ──
+show_help() {
+  echo -e "${BOLD}gymvision-scraper${NC} — Google Maps gym scraper"
+  echo ""
+  echo -e "${BOLD}Setup:${NC}"
+  echo "  gymvision-scraper install                    Build the scraper binary"
+  echo "  gymvision-scraper install queries             Install all query packs"
+  echo "  gymvision-scraper install queries <country>   Install specific countries"
+  echo ""
+  echo -e "${BOLD}Scraping:${NC}"
+  echo "  gymvision-scraper scrape <city>    Scrape a city (deep or quick)"
+  echo "  gymvision-scraper list             Show available cities"
+  echo "  gymvision-scraper status           Show progress & totals"
+  echo ""
+  echo -e "${BOLD}Examples:${NC}"
+  echo "  gymvision-scraper install"
+  echo "  gymvision-scraper install queries france canada"
+  echo "  gymvision-scraper scrape paris"
+  echo "  gymvision-scraper scrape Tokyo"
+}
+
+# ── Install ──
+cmd_install() {
+  echo -e "${BOLD}=== Building scraper ===${NC}"
+  echo ""
+
+  if ! command -v go &> /dev/null; then
+    echo -e "${RED}Error: Go is not installed.${NC}"
+    echo "Install via: brew install go (macOS) or https://go.dev/dl/"
+    exit 1
+  fi
+
+  if ! command -v python3 &> /dev/null; then
+    echo -e "${RED}Error: Python 3 is not installed.${NC}"
+    exit 1
+  fi
+
+  echo -e "Go:     $(go version)"
+  echo -e "Python: $(python3 --version)"
+  echo ""
+
+  if [ ! -d "$GYMVISION_DIR/google-maps-scraper" ]; then
+    echo "Cloning google-maps-scraper..."
+    git clone https://github.com/gosom/google-maps-scraper.git "$GYMVISION_DIR/google-maps-scraper"
+  fi
+
+  echo "Building binary..."
+  cd "$GYMVISION_DIR/google-maps-scraper"
+  go mod download
+  go build
+  echo -e "${GREEN}Binary built.${NC}"
+  echo ""
+
+  mkdir -p "$RESULTS_DIR"
+
+  # Add to PATH
+  mkdir -p "$HOME/bin"
+  ln -sf "$GYMVISION_DIR/gymvision-scraper" "$HOME/bin/gymvision-scraper"
+
+  if ! echo "$PATH" | grep -q "$HOME/bin"; then
+    SHELL_RC="$HOME/.zshrc"
+    [ -f "$HOME/.bashrc" ] && [ ! -f "$HOME/.zshrc" ] && SHELL_RC="$HOME/.bashrc"
+    echo 'export PATH="$HOME/bin:$PATH"' >> "$SHELL_RC"
+    echo -e "Added ~/bin to PATH in ${SHELL_RC}"
+  fi
+
+  echo -e "${GREEN}${BOLD}Install complete!${NC}"
+  echo ""
+  echo "Next steps:"
+  echo "  gymvision-scraper install queries          # install all city packs"
+  echo "  gymvision-scraper install queries france    # or just one country"
+}
+
+# ── Install Queries ──
+cmd_install_queries() {
+  if [ ! -d "$DATA_DIR" ]; then
+    echo -e "${RED}Error: data/queries not found. Are you in the repo directory?${NC}"
+    exit 1
+  fi
+
+  mkdir -p "$QUERIES_DIR"
+
+  # Get available countries
+  AVAILABLE=()
+  for d in "$DATA_DIR"/*/; do
+    [ ! -d "$d" ] && continue
+    AVAILABLE+=("$(basename "$d")")
+  done
+
+  if [ $# -eq 0 ]; then
+    # Install all
+    TARGETS=("${AVAILABLE[@]}")
+    echo -e "${BOLD}Installing all query packs...${NC}"
+  else
+    # Install specific countries
+    TARGETS=("$@")
+    echo -e "${BOLD}Installing query packs: ${TARGETS[*]}${NC}"
+  fi
+
+  echo ""
+  total_cities=0
+
+  for country in "${TARGETS[@]}"; do
+    country_lower=$(echo "$country" | tr '[:upper:]' '[:lower:]')
+    src="$DATA_DIR/$country_lower"
+
+    if [ ! -d "$src" ]; then
+      echo -e "  ${RED}$country_lower — not found${NC}"
+      echo -e "  ${DIM}Available: ${AVAILABLE[*]}${NC}"
+      continue
+    fi
+
+    mkdir -p "$QUERIES_DIR/$country_lower"
+    count=0
+    for f in "$src"/*.txt; do
+      [ ! -f "$f" ] && continue
+      cp "$f" "$QUERIES_DIR/$country_lower/"
+      count=$((count + 1))
+    done
+    total_cities=$((total_cities + count))
+    echo -e "  ${GREEN}$country_lower${NC} — $count cities installed"
+  done
+
+  echo ""
+  echo -e "${GREEN}${BOLD}Done!${NC} $total_cities cities ready to scrape."
+  echo ""
+  echo "Run: gymvision-scraper list"
+}
+
+# ── List ──
+cmd_list() {
+  if [ ! -d "$QUERIES_DIR" ] || [ -z "$(ls -A "$QUERIES_DIR" 2>/dev/null)" ]; then
+    echo -e "${YELLOW}No query packs installed.${NC}"
+    echo ""
+    echo "Run: gymvision-scraper install queries"
+    exit 0
+  fi
+
+  echo -e "${BOLD}Available cities:${NC}"
+  echo ""
+
+  for country_dir in "$QUERIES_DIR"/*/; do
+    [ ! -d "$country_dir" ] && continue
+    country=$(basename "$country_dir")
+    echo -e "${CYAN}${BOLD}  $country${NC}"
+
+    for f in "$country_dir"*.txt; do
+      [ ! -f "$f" ] && continue
+      name=$(basename "$f" .txt)
+      name=$(basename "$name" _done)
+
+      if [[ "$f" == *_done.txt ]]; then
+        result_file="$RESULTS_DIR/${name}.csv"
+        if [ -f "$result_file" ]; then
+          count=$(tail -n +2 "$result_file" | wc -l | tr -d ' ')
+          echo -e "    ${GREEN}$name ($count gyms)${NC}"
+        else
+          echo -e "    ${GREEN}$name (done)${NC}"
+        fi
+      else
+        echo -e "    ${YELLOW}$name${NC}"
+      fi
+    done
+    echo ""
+  done
+
+  echo -e "  ${GREEN}green${NC} = scraped  ${YELLOW}yellow${NC} = pending"
+  echo ""
+  echo "Run: gymvision-scraper scrape <city>"
+}
+
+# ── Status ──
+cmd_status() {
+  done_count=0
+  pending_count=0
+  total_gyms=0
+
+  if [ -d "$QUERIES_DIR" ]; then
+    for f in "$QUERIES_DIR"/**/*.txt; do
+      [ ! -f "$f" ] && continue
+      if [[ "$f" == *_done.txt ]]; then
+        done_count=$((done_count + 1))
+      else
+        pending_count=$((pending_count + 1))
+      fi
+    done
+  fi
+
+  for f in "$RESULTS_DIR"/*.csv; do
+    [ ! -f "$f" ] && continue
+    count=$(tail -n +2 "$f" | wc -l | tr -d ' ')
+    total_gyms=$((total_gyms + count))
+  done
+
+  installed=0
+  if [ -d "$DATA_DIR" ]; then
+    for f in "$DATA_DIR"/**/*.txt; do
+      [ ! -f "$f" ] && continue
+      installed=$((installed + 1))
+    done
+  fi
+
+  echo -e "${BOLD}Scraping progress:${NC}"
+  echo -e "  ${GREEN}Done:${NC}      $done_count cities"
+  echo -e "  ${YELLOW}Pending:${NC}   $pending_count cities"
+  echo -e "  ${DIM}Available:${NC} $installed cities (in data/queries)"
+  echo -e "  ${CYAN}Total:${NC}     $total_gyms gyms scraped"
+  echo ""
+
+  if [ "$total_gyms" -gt 0 ]; then
+    echo -e "${BOLD}Results:${NC}"
+    for f in "$RESULTS_DIR"/*.csv; do
+      [ ! -f "$f" ] && continue
+      name=$(basename "$f" .csv)
+      count=$(tail -n +2 "$f" | wc -l | tr -d ' ')
+      echo -e "  $name: ${GREEN}$count gyms${NC}"
+    done
+  fi
+}
+
+# ── Scrape ──
+cmd_scrape() {
+  if [ -z "$1" ]; then
+    echo -e "${RED}Error: specify a city${NC}"
+    echo "Usage: gymvision-scraper scrape <city>"
+    exit 1
+  fi
+
+  CITY="$1"
+  CITY_LOWER=$(echo "$CITY" | tr '[:upper:]' '[:lower:]' | tr ' ' '_')
+
+  if [ ! -f "$SCRAPER" ]; then
+    echo -e "${RED}Scraper not built. Run: gymvision-scraper install${NC}"
+    exit 1
+  fi
+
+  mkdir -p "$RESULTS_DIR"
+
+  # Find matching query file
+  QUERY_FILE=""
+  if [ -d "$QUERIES_DIR" ]; then
+    for f in "$QUERIES_DIR"/**/*.txt; do
+      [ ! -f "$f" ] && continue
+      fname=$(basename "$f" .txt)
+      fname_lower=$(echo "$fname" | tr '[:upper:]' '[:lower:]')
+      if [ "$fname_lower" = "$CITY_LOWER" ]; then
+        QUERY_FILE="$f"
+        break
+      fi
+    done
+  fi
+
+  if [ -n "$QUERY_FILE" ]; then
+    # Deep scrape
+    QUERY_COUNT=$(wc -l < "$QUERY_FILE" | tr -d ' ')
+    OUTPUT_FILE="$RESULTS_DIR/${CITY_LOWER}.csv"
+    echo -e "${BOLD}Deep scrape:${NC} $CITY ($QUERY_COUNT neighborhoods)"
+    echo -e "Output: $OUTPUT_FILE"
+    echo ""
+
+    RAW_FILE=$(mktemp)
+
+    "$SCRAPER" \
+      -input "$QUERY_FILE" \
+      -results "$RAW_FILE" \
+      -depth 10 \
+      -lang en \
+      -c 12 \
+      -exit-on-inactivity 3m
+
+    python3 -c "
+import csv
+seen = set()
+with open('$RAW_FILE', 'r', encoding='utf-8') as infile, open('$OUTPUT_FILE', 'w', newline='', encoding='utf-8') as outfile:
+    reader = csv.DictReader(infile)
+    writer = csv.DictWriter(outfile, fieldnames=reader.fieldnames)
+    writer.writeheader()
+    for row in reader:
+        pid = row.get('place_id', '')
+        if pid and pid not in seen:
+            seen.add(pid)
+            writer.writerow(row)
+"
+    rm -f "$RAW_FILE"
+
+    COUNT=$(tail -n +2 "$OUTPUT_FILE" | wc -l | tr -d ' ')
+
+    DIR=$(dirname "$QUERY_FILE")
+    BASE=$(basename "$QUERY_FILE" .txt)
+    mv "$QUERY_FILE" "${DIR}/${BASE}_done.txt"
+
+    echo ""
+    echo -e "${GREEN}${BOLD}Done!${NC} Found ${GREEN}$COUNT${NC} unique gyms in $CITY"
+    echo "Saved to: $OUTPUT_FILE"
+  else
+    # Quick scrape
+    SAFE_CITY=$(echo "$CITY" | tr ' ' '_')
+    OUTPUT_FILE="$RESULTS_DIR/${SAFE_CITY}.csv"
+    echo -e "${BOLD}Quick scrape:${NC} $CITY (no query pack — using default queries)"
+    echo -e "Output: $OUTPUT_FILE"
+    echo ""
+    echo -e "${YELLOW}Tip: add a query pack in data/queries/<country>/${CITY_LOWER}.txt for deeper results${NC}"
+    echo ""
+
+    QUERY_FILE_TMP=$(mktemp)
+    cat > "$QUERY_FILE_TMP" <<EOF
+gym in $CITY
+fitness center in $CITY
+crossfit in $CITY
+fitness club in $CITY
+workout gym in $CITY
+training gym in $CITY
+bodybuilding gym in $CITY
+EOF
+
+    RAW_FILE=$(mktemp)
+
+    "$SCRAPER" \
+      -input "$QUERY_FILE_TMP" \
+      -results "$RAW_FILE" \
+      -depth 10 \
+      -lang en \
+      -c 12 \
+      -exit-on-inactivity 3m
+
+    rm -f "$QUERY_FILE_TMP"
+
+    python3 -c "
+import csv
+seen = set()
+with open('$RAW_FILE', 'r', encoding='utf-8') as infile, open('$OUTPUT_FILE', 'w', newline='', encoding='utf-8') as outfile:
+    reader = csv.DictReader(infile)
+    writer = csv.DictWriter(outfile, fieldnames=reader.fieldnames)
+    writer.writeheader()
+    for row in reader:
+        pid = row.get('place_id', '')
+        if pid and pid not in seen:
+            seen.add(pid)
+            writer.writerow(row)
+"
+    rm -f "$RAW_FILE"
+
+    COUNT=$(tail -n +2 "$OUTPUT_FILE" | wc -l | tr -d ' ')
+    echo ""
+    echo -e "${GREEN}${BOLD}Done!${NC} Found ${GREEN}$COUNT${NC} unique gyms in $CITY"
+    echo "Saved to: $OUTPUT_FILE"
+  fi
+}
+
+# ── Router ──
+case "${1:-}" in
+  install)
+    if [ "${2:-}" = "queries" ]; then
+      shift 2
+      cmd_install_queries "$@"
+    else
+      cmd_install
+    fi
+    ;;
+  list)     cmd_list ;;
+  scrape)   cmd_scrape "$2" ;;
+  status)   cmd_status ;;
+  *)        show_help ;;
+esac
