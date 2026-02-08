@@ -11,9 +11,10 @@ Requires **Go 1.25+** and **Python 3**.
 ```bash
 git clone git@github.com:raphfeuer/gymvision-scraper.git
 cd gymvision-scraper
-gymvision-scraper install
-gymvision-scraper install queries
-gymvision-scraper scrape paris
+./gymvision-scraper install          # builds binary, adds to PATH
+source ~/.zshrc                      # reload shell (one time)
+gymvision-scraper install queries    # install all 56 city packs
+gymvision-scraper scrape paris       # start scraping
 ```
 
 ## Commands
